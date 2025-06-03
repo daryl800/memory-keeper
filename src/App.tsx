@@ -23,7 +23,7 @@ function App() {
 
     useEffect(() => {
         loadVoices().then((voices) => {
-            console.log('🗣️ Available voices:', voices);
+            console.log('Available voices:', voices.map(v => ({ name: v.name, lang: v.lang })));
         });
     }, []);
 
@@ -133,7 +133,7 @@ function App() {
             const text = data.text || '';  // Safely fallback
             return text;
         } catch (err) {
-            console.error('❌ TC Deepgram fallback failed:', err);
+            console.error('❌ TC STT fallback failed:', err);
             return '';
         }
     };
