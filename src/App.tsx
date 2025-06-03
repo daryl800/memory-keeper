@@ -29,9 +29,8 @@ function App() {
 
 
   useEffect(() => {
-    speak('Welcome to Memory Keeper! You can add memories by typing or speaking them. Use the filter to view specific categories.');
+    speak('欢迎使用 Memory Keeper! 请按住按钮开始录音，松开后将自动转录您的语音。');
   }, [])
-
 
   useEffect(() => {
     localStorage.setItem('memories', JSON.stringify(memories));
@@ -133,10 +132,7 @@ function App() {
       });
 
       const data = await res.json();
-      console.log('🔍 TC STT response:', data);
-      speak(data.transcription);  // Speak the transcribed text
-
-      const text = data.text || '';  // Safely fallback
+      const text = data.transcription || '';  // Safely fallback
       return text;
     } catch (err) {
       console.error('❌ TC STT fallback failed:', err);
@@ -192,18 +188,31 @@ function App() {
       audioChunks.push(event.data);
     };
 
-    mediaRecorder.onstop = async () => {
+    const handleTranscription = async (audio: Blob) => {
+      try {
+        console.log('🎤 Starting transcription for audio:', audio);
+        const respondText = await uploadToTCSTT(audio);
+        if (respondText) {
+          console.log('📝 transcribed text:', respondText);
+          speak(respondText);  // Speak the transcribed text
+          setInput(respondText);  // ✅ reliably updates input now
+        }
+      } catch (err) {
+        console.error('❌ Transcription failed:', err);
+      }
+    };
+
+
+    mediaRecorder.onstop = () => {
       const audio = new Blob(audioChunks, { type: 'audio/webm' });
       setAudioBlob(audio);
-      const respondText = await uploadToTCSTT(audio);
-      if (respondText) {
-        console.log('📝 the transcribed text:', respondText);
-        setInput(respondText);
-      }
+
+      handleTranscription(audio);  // 👈 call separate async function
 
       stream.getTracks().forEach((track) => track.stop());
       audioContext.close();
     };
+
 
     mediaRecorder.start();
     mediaRecorderRef.current = mediaRecorder;
