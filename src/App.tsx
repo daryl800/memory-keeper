@@ -76,11 +76,10 @@ function App() {
   const speak = async (text: string) => {
     const voices = await loadVoices();
 
-    const cantoneseVoice = voices.find(
-      (v) =>
-        v.lang.toLowerCase().includes('yue') || v.lang.toLowerCase().includes('zh-hk')
-    );
-
+    const cantoneseVoice = voices.find((v) => {
+      const lang = v.lang.toLowerCase();
+      return v.name.includes('Google 粤語') || lang.includes('yue') || lang.includes('zh-hk');
+    });
 
     const utterance = new SpeechSynthesisUtterance(text);
     if (cantoneseVoice) {
@@ -88,11 +87,12 @@ function App() {
       utterance.lang = cantoneseVoice.lang;
     } else {
       console.warn('⚠️ Cantonese voice not found, falling back to default.');
-      utterance.lang = 'zh-CN'; // still set it to zh-HK in case browser picks something close
+      utterance.lang = 'zh-HK'; // encourage matching zh-HK voices
     }
 
     window.speechSynthesis.speak(utterance);
   };
+
 
 
   const addMemory = () => {
@@ -147,6 +147,8 @@ function App() {
 
 
   const startRecording = async () => {
+    if (recording) return; // prevent re-triggering
+
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const mediaRecorder = new MediaRecorder(stream);
     const audioChunks: Blob[] = [];
@@ -190,10 +192,14 @@ function App() {
       audioChunks.push(event.data);
     };
 
-    mediaRecorder.onstop = () => {
+    mediaRecorder.onstop = async () => {
       const audio = new Blob(audioChunks, { type: 'audio/webm' });
       setAudioBlob(audio);
-      uploadToTCSTT(audio);
+      const respondText = await uploadToTCSTT(audio);
+      if (respondText) {
+        console.log('📝 the transcribed text:', respondText);
+        setInput(respondText);
+      }
 
       stream.getTracks().forEach((track) => track.stop());
       audioContext.close();
@@ -244,11 +250,15 @@ function App() {
             Add
           </button>
           <button
-            onClick={recording ? stopRecording : startRecording}
+            onMouseDown={startRecording}
+            onMouseUp={stopRecording}
+            onTouchStart={startRecording}
+            onTouchEnd={stopRecording}
             className={`ml-2 px-3 py-1 rounded-lg ${recording ? 'bg-red-500 text-white' : 'bg-green-500 text-white'}`}
           >
-            {recording ? 'Stop 🎙️' : 'Speak 🎤'}
+            {recording ? 'Recording 🎙️' : 'Hold to Speak 🎤'}
           </button>
+
         </div>
 
         <div className="mb-4">
