@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { format } from 'date-fns';
 
-function _App() {
+function App() {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const [recording, setRecording] = useState(false);
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
@@ -23,13 +22,58 @@ function _App() {
     const [selectedCategory, setSelectedCategory] = useState<string>('All');
 
     useEffect(() => {
+        loadVoices().then((voices) => {
+            console.log('🗣️ Available voices:', voices);
+        });
+    }, []);
+
+
+    useEffect(() => {
+        speak('Welcome to Memory Keeper! You can add memories by typing or speaking them. Use the filter to view specific categories.');
+    }, [])
+
+
+    useEffect(() => {
         localStorage.setItem('memories', JSON.stringify(memories));
     }, [memories]);
 
-    const speak = (text: string) => {
-        const voices = window.speechSynthesis.getVoices();
+
+    const loadVoices = (): Promise<SpeechSynthesisVoice[]> => {
+        return new Promise((resolve) => {
+            let voices = window.speechSynthesis.getVoices();
+
+            if (voices.length) {
+                resolve(voices);
+            } else {
+                const tryLoad = () => {
+                    voices = window.speechSynthesis.getVoices();
+                    if (voices.length) {
+                        resolve(voices);
+                    } else {
+                        setTimeout(tryLoad, 200); // Keep checking every 200ms
+                    }
+                };
+
+                tryLoad(); // Start polling
+
+                // Also use event in case it fires
+                window.speechSynthesis.onvoiceschanged = () => {
+                    voices = window.speechSynthesis.getVoices();
+                    resolve(voices);
+                };
+            }
+        });
+    };
+
+
+
+    const speak = async (text: string) => {
+        const voices = await loadVoices();
+
         const cantoneseVoice = voices.find(
-            (v) => v.lang.toLowerCase().includes('zh') && v.name.includes('HK')
+            (v) =>
+                (v.lang.toLowerCase().includes('yue') || v.lang.toLowerCase().includes('zh-hk')) &&
+                v.name.toLowerCase().includes('hong kong')
         );
 
         const utterance = new SpeechSynthesisUtterance(text);
@@ -37,10 +81,13 @@ function _App() {
             utterance.voice = cantoneseVoice;
             utterance.lang = cantoneseVoice.lang;
         } else {
-            utterance.lang = 'zh-HK';
+            console.warn('⚠️ Cantonese voice not found, falling back to default.');
+            utterance.lang = 'zh-HK'; // still set it to zh-HK in case browser picks something close
         }
+
         window.speechSynthesis.speak(utterance);
     };
+
 
     const addMemory = () => {
         if (input.trim() !== '') {
@@ -51,35 +98,7 @@ function _App() {
             };
             setMemories([newMemory, ...memories]);
             setInput('');
-            speak(newMemory.text);
         }
-    };
-
-    const startVoiceInput = () => {
-        const SpeechRecognition =
-            (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-            alert('Speech recognition is not supported in this browser.');
-            return;
-        }
-
-        const recognition = new SpeechRecognition();
-        recognition.lang = 'yue-HK';
-        recognition.interimResults = false;
-        recognition.maxAlternatives = 1;
-
-        recognition.onresult = (event: SpeechRecognitionEvent) => {
-            const transcript = event.results[0][0].transcript;
-            setInput(transcript);
-        };
-
-        recognition.onerror = (event: any) => {
-            console.error('Speech recognition error:', event.error);
-            alert('Speech recognition error: ' + event.error);
-        };
-
-        recognition.start();
-        recognitionRef.current = recognition;
     };
 
     const filteredMemories =
@@ -96,58 +115,10 @@ function _App() {
         groupedMemories[date].push(memory);
     });
 
-    // const uploadToGoogleSTT = async (audio: Blob) => {
-    //   const formData = new FormData();
-    //   formData.append('file', audio, 'audio.mp3');
 
-    //   try {
-    //     const res = await fetch('https://companion-backend-production-0935.up.railway.app/transcribe', {
-    //       method: 'POST',
-    //       body: formData,
-    //     });
-
-    //     const data = await res.json();
-    //     console.log('Google transcription:', data.text);
-
-    //     if (data.text && data.text.trim().length > 2) {
-    //       setInput(data.text);
-    //     } else {
-    //       const fallbackText = await uploadToDeepgramSTT(audio);
-    //       if (fallbackText) {
-    //         setInput(fallbackText);
-    //       } else {
-    //         alert('Transcription failed from both Google and Deepgram.');
-    //       }
-    //     }
-
-    //   } catch (err) {
-    //     console.error('Google STT failed:', err);
-    //     const fallbackText = await uploadToDeepgramSTT(audio);
-    //     if (fallbackText) {
-    //       setInput(fallbackText);
-    //     } else {
-    //       alert('Transcription failed from both Google and Deepgram.');
-    //     }
-    //   }
-    // };
-
-    const uploadToGoogleSTT = async (audio: Blob) => {
-        // Skip Google, go straight to Deepgram for testing
-        console.log('Skipping Google STT, testing Deepgram fallback...');
-
-        const fallbackText = await uploadToDeepgramSTT(audio);
-        if (fallbackText) {
-            setInput(fallbackText);
-        }
-        // else {
-        //   alert('Transcription failed from Deepgram.');
-        // }
-    };
-
-
-    const uploadToDeepgramSTT = async (audio: Blob): Promise<string> => {
+    const uploadToTCSTT = async (audio: Blob): Promise<string> => {
         const formData = new FormData();
-        formData.append('audio', audio, 'mp3');  // ✅ Match the parameter name in FastAPI
+        formData.append('audio', audio, 'webm');  // ✅ Match the parameter name in FastAPI
 
         try {
             const res = await fetch('http://43.156.32.74:8001/transcribe-cantonese', {
@@ -156,7 +127,8 @@ function _App() {
             });
 
             const data = await res.json();
-            console.log('🔍 Deepgram TC full response:', data);
+            console.log('🔍 TC STT response:', data);
+            speak(data.transcription);  // Speak the transcribed text
 
             const text = data.text || '';  // Safely fallback
             return text;
@@ -215,7 +187,7 @@ function _App() {
         mediaRecorder.onstop = () => {
             const audio = new Blob(audioChunks, { type: 'audio/webm' });
             setAudioBlob(audio);
-            uploadToGoogleSTT(audio);
+            uploadToTCSTT(audio);
 
             stream.getTracks().forEach((track) => track.stop());
             audioContext.close();
@@ -329,4 +301,4 @@ function _App() {
     );
 }
 
-export default _App;
+export default App;
