@@ -5,7 +5,7 @@ function App() {
   const [recording, setRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [input, setInput] = useState('');
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // const recognitionRef = useRef<SpeechRecognition | null>(null);
   const [category, setCategory] = useState('General');
 
   type Memory = {
@@ -120,8 +120,12 @@ function App() {
     groupedMemories[date].push(memory);
   });
 
+  type TranscriptionResponse = {
+    transcription: string;
+    category: string;
+  };
 
-  const uploadToTCSTT = async (audio: Blob): Promise<string> => {
+  const uploadToTCSTT = async (audio: Blob): Promise<TranscriptionResponse> => {
     const formData = new FormData();
     formData.append('audio', audio, 'webm');  // ✅ Match the parameter name in FastAPI
 
@@ -132,11 +136,10 @@ function App() {
       });
 
       const data = await res.json();
-      const text = data.transcription || '';  // Safely fallback
-      return text;
+      return data;
     } catch (err) {
-      console.error('❌ TC STT fallback failed:', err);
-      return '';
+      console.error('❌ TC STT failed:', err);
+      return { transcription: '', category: '' };
     }
   };
 
@@ -191,11 +194,14 @@ function App() {
     const handleTranscription = async (audio: Blob) => {
       try {
         console.log('🎤 Starting transcription for audio:', audio);
-        const respondText = await uploadToTCSTT(audio);
-        if (respondText) {
-          console.log('📝 transcribed text:', respondText);
-          speak(respondText);  // Speak the transcribed text
-          setInput(respondText);  // ✅ reliably updates input now
+        const response = await uploadToTCSTT(audio);
+        if (response && response.category) {
+          console.log('📝 transcribed text:', response.transcription);
+          speak(response.transcription);  // Speak the transcribed text
+          speak("呢个系一个" + response.category + "类型");  // Speak the category
+          setInput(response.transcription);  // ✅ reliably updates input now
+        } else {
+          speak("唔好意思，刚才听唔清楚，麻烦你再讲一次吖！");
         }
       } catch (err) {
         console.error('❌ Transcription failed:', err);
@@ -225,6 +231,22 @@ function App() {
       setRecording(false);
     }
   };
+
+
+  const [seconds, setSeconds] = useState(0);
+
+  useEffect(() => {
+    let interval: number | undefined;
+    if (recording) {
+      interval = setInterval(() => {
+        setSeconds(prev => prev + 1);
+      }, 1000);
+    } else {
+      setSeconds(0); // Reset counter when not recording
+    }
+
+    return () => clearInterval(interval); // Cleanup on unmount or recording stop
+  }, [recording]);
 
   return (
     <div className="min-h-screen bg-gray-100 p-6">
@@ -265,7 +287,7 @@ function App() {
             onTouchEnd={stopRecording}
             className={`ml-2 px-3 py-1 rounded-lg ${recording ? 'bg-red-500 text-white' : 'bg-green-500 text-white'}`}
           >
-            {recording ? 'Recording 🎙️' : 'Hold to Speak 🎤'}
+            {recording ? `Recording ... ${seconds} sec` : 'Hold to Speak 🎤'}
           </button>
 
         </div>
