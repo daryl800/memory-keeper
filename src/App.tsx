@@ -30,12 +30,27 @@ function App() {
 
   useEffect(() => {
     speak('欢迎使用 Memory Keeper! 请按住按钮开始录音，松开后将自动转录您的语音。');
+    wsTest();
   }, [])
 
   useEffect(() => {
     localStorage.setItem('memories', JSON.stringify(memories));
   }, [memories]);
 
+
+  const wsTest = async () => {
+
+    const ws = new WebSocket("ws://43.156.32.74:8001/ws");
+
+    ws.onopen = () => {
+      console.log("WebSocket connected");
+      ws.send("Hello, this is a test");
+    };
+
+    ws.onmessage = (msg) => {
+      console.log("Server replied:", msg.data);
+    }
+  }
 
   const loadVoices = (): Promise<SpeechSynthesisVoice[]> => {
     return new Promise((resolve) => {
@@ -72,7 +87,28 @@ function App() {
   };
 
 
+  const playBase64Audio = (base64Audio: string) => {
+    if (!base64Audio || !/^[A-Za-z0-9+/=]+$/.test(base64Audio)) {
+      console.error("Invalid base64 string:", base64Audio);
+      return;
+    }
+    const byteString = atob(base64Audio);
+    const byteArray = new Uint8Array(byteString.length);
+    for (let i = 0; i < byteString.length; i++) {
+      byteArray[i] = byteString.charCodeAt(i);
+    }
+
+    const audioBlob = new Blob([byteArray], { type: "audio/wav" });
+    const audioUrl = URL.createObjectURL(audioBlob);
+
+    const audio = new Audio(audioUrl);
+    audio.play();
+  };
+
+
   const speak = async (text: string) => {
+    window.speechSynthesis.cancel(); // Stop previous utterances
+
     const voices = await loadVoices();
 
     const cantoneseVoice = voices.find((v) => {
@@ -92,19 +128,17 @@ function App() {
     window.speechSynthesis.speak(utterance);
   };
 
-
-
-  const addMemory = () => {
-    if (input.trim() !== '') {
-      const newMemory = {
-        text: input.trim(),
-        category,
-        timestamp: new Date().toISOString(),
-      };
-      setMemories([newMemory, ...memories]);
-      setInput('');
-    }
-  };
+  // const addMemory = () => {
+  //   if (input.trim() !== '') {
+  //     const newMemory = {
+  //       text: input.trim(),
+  //       category,
+  //       timestamp: new Date().toISOString(),
+  //     };
+  //     setMemories([newMemory, ...memories]);
+  //     setInput('');
+  //   }
+  // };
 
   const filteredMemories =
     selectedCategory === 'All'
@@ -120,29 +154,62 @@ function App() {
     groupedMemories[date].push(memory);
   });
 
-  type TranscriptionResponse = {
-    transcription: string;
+  // Updated type definition
+  type TranscribedResponseObject = {
     category: string;
+    eventCreatedAt: string;
+    isQuestion: boolean;
+    isReminder: boolean;
+    location: string[];
+    mainEvent: string;
+    reminderDatetime: string;
+    tags: string[];
+    transcription: string;
+    ttsOutput: string;
   };
 
-  const uploadToTCSTT = async (audio: Blob): Promise<TranscriptionResponse> => {
+  type ResponseObject = {
+    success: boolean;
+    TranscriptionResponse: TranscribedResponseObject;
+  };
+
+
+  const uploadToTCSTT = async (audio: Blob): Promise<ResponseObject> => {
     const formData = new FormData();
-    formData.append('audio', audio, 'webm');  // ✅ Match the parameter name in FastAPI
+    formData.append('audio', audio, 'audio.webm');  // More explicit filename
 
     try {
-      const res = await fetch('http://43.156.32.74:8001/transcribe-cantonese', {
+      const res = await fetch('http://43.156.32.74:8001/transcribe/', {
         method: 'POST',
         body: formData,
       });
 
-      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+
+      const data: ResponseObject = await res.json();
+
       return data;
     } catch (err) {
       console.error('❌ TC STT failed:', err);
-      return { transcription: '', category: '' };
+      return {
+        success: false,
+        TranscriptionResponse: {
+          eventCreatedAt: new Date().toISOString(),
+          reminderDatetime: '',
+          category: 'General',
+          mainEvent: '',
+          transcription: '',
+          isReminder: false,
+          ttsOutput: '',
+          isQuestion: false,
+          location: [],
+          tags: []
+        } as TranscribedResponseObject // Ensure this matches the expected type
+      };
     }
   };
-
 
 
   const startRecording = async () => {
@@ -191,15 +258,46 @@ function App() {
       audioChunks.push(event.data);
     };
 
+
+    const speakDateTime = (isoDatetimeStr: string) => {
+      const date = new Date(isoDatetimeStr);
+
+      // Example: "6月6号 上午8点30分"
+      const spoken = date.toLocaleString("zh-HK", {
+        month: "long",
+        day: "numeric",
+        hour: "numeric",
+        minute: "numeric",
+        hour12: true,
+      });
+
+      return spoken;
+    };
     const handleTranscription = async (audio: Blob) => {
       try {
         console.log('🎤 Starting transcription for audio:', audio);
         const response = await uploadToTCSTT(audio);
-        if (response && response.category) {
-          console.log('📝 transcribed text:', response.transcription);
-          speak(response.transcription);  // Speak the transcribed text
-          speak("呢个系一个" + response.category + "类型");  // Speak the category
-          setInput(response.transcription);  // ✅ reliably updates input now
+        if (response.success && response.TranscriptionResponse) {
+          console.log('✅ Transcription successful:', response.TranscriptionResponse);
+          console.log('📝 transcribed text:', response.TranscriptionResponse.transcription);
+          playBase64Audio(response.TranscriptionResponse.ttsOutput);
+          const totalSpeechTime = Math.round((audio.size / 1000) * 0.1);
+          console.log('⏱️ Total speech time:', totalSpeechTime, 'seconds');
+
+          // // speak("你头先讲左" + totalSpeechTime + "秒钟既说话！");  // Speak the category
+          // speak("你头先话" + response.text);  // Speak the transcribed text
+          // // speak("而呢个系一个" + response.category + "类型");  // Speak the category
+          // if (response.isReminder) {
+          //   const when = response.reminderDatetime ? speakDateTime(response.reminderDatetime) : '';
+          //   speak("记住：请你系 " + when + " " + response.mainEvent);
+          // }
+          // setInput(response.mainEvent);  // ✅ reliably updates input now
+          // const newMemory: Memory = {
+          //   text: response.mainEvent,
+          //   category: response.category || 'General',
+          //   timestamp: new Date().toISOString()
+          // };
+          // setMemories(prev => [newMemory, ...prev]);
         } else {
           speak("唔好意思，刚才听唔清楚，麻烦你再讲一次吖！");
         }
@@ -254,15 +352,15 @@ function App() {
         <h1 className="text-2xl font-bold text-center text-blue-600 mb-4">Memory Keeper</h1>
 
         <div className="flex gap-2 mb-4">
-          <input
+          {/* <input
             type="text"
             placeholder="Enter a memory..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             className="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
-          />
+          /> */}
 
-          <select
+          {/* <select
             value={category}
             onChange={(e) => setCategory(e.target.value)}
             className="px-2 py-1 border rounded-lg bg-white text-gray-700"
@@ -272,14 +370,14 @@ function App() {
             <option>Health</option>
             <option>Shopping</option>
             <option>Reminder</option>
-          </select>
+          </select> */}
 
-          <button
+          {/* <button
             onClick={addMemory}
             className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600"
           >
             Add
-          </button>
+          </button> */}
           <button
             onMouseDown={startRecording}
             onMouseUp={stopRecording}
@@ -292,7 +390,7 @@ function App() {
 
         </div>
 
-        <div className="mb-4">
+        {/* <div className="mb-4">
           <label className="mr-2 font-semibold">Filter by category:</label>
           <select
             value={selectedCategory}
@@ -306,7 +404,7 @@ function App() {
               </option>
             ))}
           </select>
-        </div>
+        </div> */}
 
         <div className="space-y-6">
           {Object.entries(groupedMemories)
