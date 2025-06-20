@@ -1,4 +1,5 @@
 {
+  "homepage": "https://daryl800.github.io/memory-keeper",
   "name": "memory-keeper",
   "private": true,
   "version": "0.0.0",
@@ -7,7 +8,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build"
   },
   "dependencies": {
     "date-fns": "^4.1.0",
