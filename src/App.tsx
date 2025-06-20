@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from 'react';
 function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const [recording, setRecording] = useState(false);
-  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+
   const wsRef = useRef<WebSocket | null>(null)
   const welcomeMsgFlag = useRef(false)
   const [isWsReady, setIsWsReady] = useState(false);
@@ -18,12 +18,14 @@ function App() {
       loadVoices().then((voices) => {
         console.log('Available voices:', voices.map(v => ({ name: v.name, lang: v.lang })));
       });
-      speak('欢迎使用 Memory Keeper! 请按住按钮开始录音，松开后将自动转录您的语音。');
+      // speak('欢迎使用 Memory Keeper! 请按住按钮开始录音，松开后将自动转录您的语音。');
       welcomeMsgFlag.current = true;
     }
     if (wsRef.current) return; // already connected
 
-    const ws = new WebSocket("ws://43.156.32.74:8001/ws");
+    // const ws = new WebSocket("wss://43.156.32.74:8001/ws");
+    const ws = new WebSocket('wss://memorykeeper.duckdns.org/ws');
+
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -94,25 +96,6 @@ function App() {
   };
 
 
-  // const playBase64Audio = (base64Audio: string) => {
-  //   if (!base64Audio || !/^[A-Za-z0-9+/=]+$/.test(base64Audio)) {
-  //     console.error("Invalid base64 string:", base64Audio);
-  //     return;
-  //   }
-  //   const byteString = atob(base64Audio);
-  //   const byteArray = new Uint8Array(byteString.length);
-  //   for (let i = 0; i < byteString.length; i++) {
-  //     byteArray[i] = byteString.charCodeAt(i);
-  //   }
-
-  //   const audioBlob = new Blob([byteArray], { type: "audio/wav" });
-  //   const audioUrl = URL.createObjectURL(audioBlob);
-
-  //   const audio = new Audio(audioUrl);
-  //   audio.play();
-  // };
-
-
   // Maintain a queue of audio playback
   let audioQueue: string[] = [];
   let isPlaying = false;
@@ -171,25 +154,6 @@ function App() {
     window.speechSynthesis.speak(utterance);
   };
 
-
-  // Updated type definition
-  type TranscribedResponseObject = {
-    category: string;
-    eventCreatedAt: string;
-    isQuery: boolean;
-    isReminder: boolean;
-    location: string[];
-    mainEvent: string;
-    reminderDatetime: string;
-    tags: string[];
-    transcription: string;
-    ttsOutput: string;
-  };
-
-  type ResponseObject = {
-    success: boolean;
-    TranscriptionResponse: TranscribedResponseObject;
-  };
 
   const sendAudioViaWS = async (audio: Blob) => {
     const reader = new FileReader();
@@ -261,14 +225,6 @@ function App() {
 
     mediaRecorder.onstop = () => {
       const fullBlob = new Blob(chunks, { type: 'audio/webm' });
-      setAudioBlob(fullBlob);
-
-      // Optional download for debugging
-      // const url = URL.createObjectURL(fullBlob);
-      // const a = document.createElement("a");
-      // a.href = url;
-      // a.download = "recording.webm";
-      // a.click();
 
       sendAudioViaWS(fullBlob);
 
@@ -303,64 +259,6 @@ function App() {
 
     return () => clearInterval(interval); // Cleanup on unmount or recording stop
   }, [recording]);
-
-
-  const handleTranscription = async (audio: Blob) => {
-    try {
-      console.log('🎤 Starting transcription for audio:', audio);
-      const response = await uploadToTCSTT(audio);
-      if (response.success && response.TranscriptionResponse) {
-        console.log('✅ Transcription successful:', response.TranscriptionResponse);
-        console.log('📝 transcribed text:', response.TranscriptionResponse.transcription);
-        playBase64Audio(response.TranscriptionResponse.ttsOutput);
-        const totalSpeechTime = Math.round((audio.size / 1000) * 0.1);
-        console.log('⏱️ Total speech time:', totalSpeechTime, 'seconds');
-
-      } else {
-        speak("唔好意思，刚才听唔清楚，麻烦你再讲一次吖！");
-      }
-    } catch (err) {
-      console.error('❌ Transcription failed:', err);
-    }
-  };
-
-  const uploadToTCSTT = async (audio: Blob): Promise<ResponseObject> => {
-    const formData = new FormData();
-    formData.append('audio', audio, 'audio.webm');  // More explicit filename
-
-    try {
-      const res = await fetch('http://43.156.32.74:8001/transcribe/', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
-      }
-
-      const data: ResponseObject = await res.json();
-
-      return data;
-    } catch (err) {
-      console.error('❌ TC STT failed:', err);
-      return {
-        success: false,
-        TranscriptionResponse: {
-          eventCreatedAt: new Date().toISOString(),
-          reminderDatetime: '',
-          category: 'General',
-          mainEvent: '',
-          transcription: '',
-          isReminder: false,
-          ttsOutput: '',
-          isQuery: false,
-          location: [],
-          tags: []
-        } as TranscribedResponseObject // Ensure this matches the expected type
-      };
-    }
-  };
-
 
   return (
     <div className="min-h-screen bg-gray-100 p-6">
