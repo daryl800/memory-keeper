@@ -266,11 +266,11 @@ function App() {
         <h1 className="text-2xl font-bold text-center text-blue-600 mb-4">Memory Keeper</h1>
         <div className="flex gap-2 mb-4">
           <button
-            onMouseDown={startRecording}
-            onMouseUp={stopRecording}
-            onTouchStart={startRecording}
-            onTouchEnd={stopRecording}
-            className={`ml-2 px-3 py-1 rounded-lg ${recording ? 'bg-red-500 text-white' : 'bg-green-500 text-white'}`}
+            onPointerDown={startRecording}
+            onPointerUp={stopRecording}
+            onPointerLeave={stopRecording} // handle drag-away cancellation
+            className={`ml-2 px-3 py-1 rounded-lg ${recording ? 'bg-red-500 text-white' : 'bg-green-500 text-white'
+              }`}
           >
             {recording ? `Recording ... ${seconds} sec` : 'Hold to Speak 🎤'}
           </button>
