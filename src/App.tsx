@@ -4,53 +4,60 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const [recording, setRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [input, setInput] = useState('');
-  // const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const [category, setCategory] = useState('General');
+  const wsRef = useRef<WebSocket | null>(null)
+  const welcomeMsgFlag = useRef(false)
+  const [isWsReady, setIsWsReady] = useState(false);
 
-  type Memory = {
-    text: string;
-    category: string;
-    timestamp: string;
+  const getCurrentTimestamp = () => {
+    const now = new Date();
+    return now.toLocaleTimeString('en-US', { hour12: false }); // e.g. "14:05:09"
   };
 
-  const [memories, setMemories] = useState<Memory[]>(() => {
-    const stored = localStorage.getItem('memories');
-    return stored ? JSON.parse(stored) : [];
-  });
-
-  const [selectedCategory, setSelectedCategory] = useState<string>('All');
-
   useEffect(() => {
-    loadVoices().then((voices) => {
-      console.log('Available voices:', voices.map(v => ({ name: v.name, lang: v.lang })));
-    });
-  }, []);
-
-
-  useEffect(() => {
-    speak('欢迎使用 Memory Keeper! 请按住按钮开始录音，松开后将自动转录您的语音。');
-    wsTest();
-  }, [])
-
-  useEffect(() => {
-    localStorage.setItem('memories', JSON.stringify(memories));
-  }, [memories]);
-
-
-  const wsTest = async () => {
+    if (welcomeMsgFlag.current === false) {
+      loadVoices().then((voices) => {
+        console.log('Available voices:', voices.map(v => ({ name: v.name, lang: v.lang })));
+      });
+      speak('欢迎使用 Memory Keeper! 请按住按钮开始录音，松开后将自动转录您的语音。');
+      welcomeMsgFlag.current = true;
+    }
+    if (wsRef.current) return; // already connected
 
     const ws = new WebSocket("ws://43.156.32.74:8001/ws");
+    wsRef.current = ws;
 
     ws.onopen = () => {
       console.log("WebSocket connected");
-      ws.send("Hello, this is a test");
+      setIsWsReady(true);
     };
 
     ws.onmessage = (msg) => {
-      console.log("Server replied:", msg.data);
-    }
-  }
+      const data = JSON.parse(msg.data);
+      console.log(`[${getCurrentTimestamp()}] Server replied:`, data);
+
+      if (data.type === "text") {
+        // handle transcription display
+      } else if (data.type === "audio") {
+        playBase64Audio(data.payload);  // ✅ play the TTS WAV
+      }
+    };
+
+    ws.onclose = () => {
+      console.log("WebSocket closed");
+      wsRef.current = null;
+    };
+
+    return () => {
+      // Only close if it's open or connecting
+      if (
+        wsRef.current &&
+        (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)
+      ) {
+        return; // already connected or connecting
+      }
+      wsRef.current = null;
+    };
+  }, []);
 
   const loadVoices = (): Promise<SpeechSynthesisVoice[]> => {
     return new Promise((resolve) => {
@@ -87,12 +94,45 @@ function App() {
   };
 
 
+  // const playBase64Audio = (base64Audio: string) => {
+  //   if (!base64Audio || !/^[A-Za-z0-9+/=]+$/.test(base64Audio)) {
+  //     console.error("Invalid base64 string:", base64Audio);
+  //     return;
+  //   }
+  //   const byteString = atob(base64Audio);
+  //   const byteArray = new Uint8Array(byteString.length);
+  //   for (let i = 0; i < byteString.length; i++) {
+  //     byteArray[i] = byteString.charCodeAt(i);
+  //   }
+
+  //   const audioBlob = new Blob([byteArray], { type: "audio/wav" });
+  //   const audioUrl = URL.createObjectURL(audioBlob);
+
+  //   const audio = new Audio(audioUrl);
+  //   audio.play();
+  // };
+
+
+  // Maintain a queue of audio playback
+  let audioQueue: string[] = [];
+  let isPlaying = false;
+
   const playBase64Audio = (base64Audio: string) => {
-    if (!base64Audio || !/^[A-Za-z0-9+/=]+$/.test(base64Audio)) {
-      console.error("Invalid base64 string:", base64Audio);
+    audioQueue.push(base64Audio);
+    if (!isPlaying) {
+      playNextAudioInQueue();
+    }
+  };
+
+  const playNextAudioInQueue = () => {
+    if (audioQueue.length === 0) {
+      isPlaying = false;
       return;
     }
-    const byteString = atob(base64Audio);
+
+    isPlaying = true;
+    const base64Audio = audioQueue.shift();
+    const byteString = atob(base64Audio!);
     const byteArray = new Uint8Array(byteString.length);
     for (let i = 0; i < byteString.length; i++) {
       byteArray[i] = byteString.charCodeAt(i);
@@ -100,11 +140,14 @@ function App() {
 
     const audioBlob = new Blob([byteArray], { type: "audio/wav" });
     const audioUrl = URL.createObjectURL(audioBlob);
-
     const audio = new Audio(audioUrl);
+
+    audio.onended = () => {
+      playNextAudioInQueue(); // Play the next item after current finishes
+    };
+
     audio.play();
   };
-
 
   const speak = async (text: string) => {
     window.speechSynthesis.cancel(); // Stop previous utterances
@@ -128,37 +171,12 @@ function App() {
     window.speechSynthesis.speak(utterance);
   };
 
-  // const addMemory = () => {
-  //   if (input.trim() !== '') {
-  //     const newMemory = {
-  //       text: input.trim(),
-  //       category,
-  //       timestamp: new Date().toISOString(),
-  //     };
-  //     setMemories([newMemory, ...memories]);
-  //     setInput('');
-  //   }
-  // };
-
-  const filteredMemories =
-    selectedCategory === 'All'
-      ? memories
-      : memories.filter((m) => m.category === selectedCategory);
-
-  const groupedMemories: { [date: string]: typeof memories } = {};
-  filteredMemories.forEach((memory) => {
-    const date = new Date(memory.timestamp).toISOString().split('T')[0];
-    if (!groupedMemories[date]) {
-      groupedMemories[date] = [];
-    }
-    groupedMemories[date].push(memory);
-  });
 
   // Updated type definition
   type TranscribedResponseObject = {
     category: string;
     eventCreatedAt: string;
-    isQuestion: boolean;
+    isQuery: boolean;
     isReminder: boolean;
     location: string[];
     mainEvent: string;
@@ -173,6 +191,138 @@ function App() {
     TranscriptionResponse: TranscribedResponseObject;
   };
 
+  const sendAudioViaWS = async (audio: Blob) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64Audio = (reader.result as string).split(',')[1]; // remove data: prefix
+      if (!isWsReady || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.warn("WebSocket not ready yet.");
+        speak("系统仲未准备好，请稍等一阵再讲一次。");
+        return;
+      }
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        console.log(`[${getCurrentTimestamp()}] Sending audio to server...`);
+        wsRef.current?.send(JSON.stringify({
+          type: "audio",
+          payload: base64Audio,
+        }));
+      } else {
+        console.warn("WebSocket is not open yet.");
+      }
+    };
+    reader.readAsDataURL(audio);
+  };
+
+
+  const startRecording = async () => {
+    if (recording) return;
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+    const chunks: Blob[] = [];
+
+    // Audio silence detection
+    const audioContext = new AudioContext();
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+
+    const dataArray = new Uint8Array(analyser.fftSize);
+    let silenceStart = performance.now();
+    const silenceThreshold = 0.01;
+    const maxSilenceDuration = 2000;
+
+    const checkSilence = () => {
+      analyser.getByteTimeDomainData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const sample = (dataArray[i] - 128) / 128;
+        sum += sample * sample;
+      }
+      const rms = Math.sqrt(sum / dataArray.length);
+
+      if (rms < silenceThreshold) {
+        if (performance.now() - silenceStart > maxSilenceDuration) {
+          stopRecording();
+          return;
+        }
+      } else {
+        silenceStart = performance.now();
+      }
+
+      requestAnimationFrame(checkSilence);
+    };
+    checkSilence();
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = () => {
+      const fullBlob = new Blob(chunks, { type: 'audio/webm' });
+      setAudioBlob(fullBlob);
+
+      // Optional download for debugging
+      // const url = URL.createObjectURL(fullBlob);
+      // const a = document.createElement("a");
+      // a.href = url;
+      // a.download = "recording.webm";
+      // a.click();
+
+      sendAudioViaWS(fullBlob);
+
+      stream.getTracks().forEach((track) => track.stop());
+      audioContext.close();
+    };
+
+    mediaRecorder.start();
+    mediaRecorderRef.current = mediaRecorder;
+    setRecording(true);
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setRecording(false);
+    }
+  };
+
+
+  const [seconds, setSeconds] = useState(0);
+
+  useEffect(() => {
+    let interval: number | undefined;
+    if (recording) {
+      interval = setInterval(() => {
+        setSeconds(prev => prev + 1);
+      }, 1000);
+    } else {
+      setSeconds(0); // Reset counter when not recording
+    }
+
+    return () => clearInterval(interval); // Cleanup on unmount or recording stop
+  }, [recording]);
+
+
+  const handleTranscription = async (audio: Blob) => {
+    try {
+      console.log('🎤 Starting transcription for audio:', audio);
+      const response = await uploadToTCSTT(audio);
+      if (response.success && response.TranscriptionResponse) {
+        console.log('✅ Transcription successful:', response.TranscriptionResponse);
+        console.log('📝 transcribed text:', response.TranscriptionResponse.transcription);
+        playBase64Audio(response.TranscriptionResponse.ttsOutput);
+        const totalSpeechTime = Math.round((audio.size / 1000) * 0.1);
+        console.log('⏱️ Total speech time:', totalSpeechTime, 'seconds');
+
+      } else {
+        speak("唔好意思，刚才听唔清楚，麻烦你再讲一次吖！");
+      }
+    } catch (err) {
+      console.error('❌ Transcription failed:', err);
+    }
+  };
 
   const uploadToTCSTT = async (audio: Blob): Promise<ResponseObject> => {
     const formData = new FormData();
@@ -203,7 +353,7 @@ function App() {
           transcription: '',
           isReminder: false,
           ttsOutput: '',
-          isQuestion: false,
+          isQuery: false,
           location: [],
           tags: []
         } as TranscribedResponseObject // Ensure this matches the expected type
@@ -212,172 +362,11 @@ function App() {
   };
 
 
-  const startRecording = async () => {
-    if (recording) return; // prevent re-triggering
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mediaRecorder = new MediaRecorder(stream);
-    const audioChunks: Blob[] = [];
-
-    const audioContext = new AudioContext();
-    const source = audioContext.createMediaStreamSource(stream);
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 2048;
-    source.connect(analyser);
-
-    const dataArray = new Uint8Array(analyser.fftSize);
-    let silenceStart = performance.now();
-    const silenceThreshold = 0.01;
-    const maxSilenceDuration = 2000;
-
-    const checkSilence = () => {
-      analyser.getByteTimeDomainData(dataArray);
-
-      let sum = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        const sample = (dataArray[i] - 128) / 128;
-        sum += sample * sample;
-      }
-      const rms = Math.sqrt(sum / dataArray.length);
-
-      if (rms < silenceThreshold) {
-        if (performance.now() - silenceStart > maxSilenceDuration) {
-          stopRecording();
-          return;
-        }
-      } else {
-        silenceStart = performance.now();
-      }
-
-      requestAnimationFrame(checkSilence);
-    };
-
-    checkSilence();
-
-    mediaRecorder.ondataavailable = (event) => {
-      audioChunks.push(event.data);
-    };
-
-
-    const speakDateTime = (isoDatetimeStr: string) => {
-      const date = new Date(isoDatetimeStr);
-
-      // Example: "6月6号 上午8点30分"
-      const spoken = date.toLocaleString("zh-HK", {
-        month: "long",
-        day: "numeric",
-        hour: "numeric",
-        minute: "numeric",
-        hour12: true,
-      });
-
-      return spoken;
-    };
-    const handleTranscription = async (audio: Blob) => {
-      try {
-        console.log('🎤 Starting transcription for audio:', audio);
-        const response = await uploadToTCSTT(audio);
-        if (response.success && response.TranscriptionResponse) {
-          console.log('✅ Transcription successful:', response.TranscriptionResponse);
-          console.log('📝 transcribed text:', response.TranscriptionResponse.transcription);
-          playBase64Audio(response.TranscriptionResponse.ttsOutput);
-          const totalSpeechTime = Math.round((audio.size / 1000) * 0.1);
-          console.log('⏱️ Total speech time:', totalSpeechTime, 'seconds');
-
-          // // speak("你头先讲左" + totalSpeechTime + "秒钟既说话！");  // Speak the category
-          // speak("你头先话" + response.text);  // Speak the transcribed text
-          // // speak("而呢个系一个" + response.category + "类型");  // Speak the category
-          // if (response.isReminder) {
-          //   const when = response.reminderDatetime ? speakDateTime(response.reminderDatetime) : '';
-          //   speak("记住：请你系 " + when + " " + response.mainEvent);
-          // }
-          // setInput(response.mainEvent);  // ✅ reliably updates input now
-          // const newMemory: Memory = {
-          //   text: response.mainEvent,
-          //   category: response.category || 'General',
-          //   timestamp: new Date().toISOString()
-          // };
-          // setMemories(prev => [newMemory, ...prev]);
-        } else {
-          speak("唔好意思，刚才听唔清楚，麻烦你再讲一次吖！");
-        }
-      } catch (err) {
-        console.error('❌ Transcription failed:', err);
-      }
-    };
-
-
-    mediaRecorder.onstop = () => {
-      const audio = new Blob(audioChunks, { type: 'audio/webm' });
-      setAudioBlob(audio);
-
-      handleTranscription(audio);  // 👈 call separate async function
-
-      stream.getTracks().forEach((track) => track.stop());
-      audioContext.close();
-    };
-
-
-    mediaRecorder.start();
-    mediaRecorderRef.current = mediaRecorder;
-    setRecording(true);
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-      setRecording(false);
-    }
-  };
-
-
-  const [seconds, setSeconds] = useState(0);
-
-  useEffect(() => {
-    let interval: number | undefined;
-    if (recording) {
-      interval = setInterval(() => {
-        setSeconds(prev => prev + 1);
-      }, 1000);
-    } else {
-      setSeconds(0); // Reset counter when not recording
-    }
-
-    return () => clearInterval(interval); // Cleanup on unmount or recording stop
-  }, [recording]);
-
   return (
     <div className="min-h-screen bg-gray-100 p-6">
       <div className="max-w-xl mx-auto bg-white shadow-md rounded-2xl p-6">
         <h1 className="text-2xl font-bold text-center text-blue-600 mb-4">Memory Keeper</h1>
-
         <div className="flex gap-2 mb-4">
-          {/* <input
-            type="text"
-            placeholder="Enter a memory..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            className="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
-          /> */}
-
-          {/* <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="px-2 py-1 border rounded-lg bg-white text-gray-700"
-          >
-            <option>General</option>
-            <option>Family</option>
-            <option>Health</option>
-            <option>Shopping</option>
-            <option>Reminder</option>
-          </select> */}
-
-          {/* <button
-            onClick={addMemory}
-            className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600"
-          >
-            Add
-          </button> */}
           <button
             onMouseDown={startRecording}
             onMouseUp={stopRecording}
@@ -387,59 +376,6 @@ function App() {
           >
             {recording ? `Recording ... ${seconds} sec` : 'Hold to Speak 🎤'}
           </button>
-
-        </div>
-
-        {/* <div className="mb-4">
-          <label className="mr-2 font-semibold">Filter by category:</label>
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="px-3 py-2 border rounded-lg"
-          >
-            <option value="All">All</option>
-            {[...new Set(memories.map((m) => m.category))].map((cat) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
-            ))}
-          </select>
-        </div> */}
-
-        <div className="space-y-6">
-          {Object.entries(groupedMemories)
-            .sort((a, b) => (a[0] < b[0] ? 1 : -1))
-            .map(([date, memoriesForDate]) => {
-              const categoryGroups: { [cat: string]: typeof memories } = {};
-              memoriesForDate.forEach((m) => {
-                const cat = m.category || 'Uncategorized';
-                if (!categoryGroups[cat]) categoryGroups[cat] = [];
-                categoryGroups[cat].push(m);
-              });
-
-              return (
-                <div key={date}>
-                  <h2 className="text-xl font-bold text-blue-700 mb-2">📅 {date}</h2>
-                  {Object.entries(categoryGroups).map(([category, mems]) => (
-                    <div key={category} className="mb-4">
-                      <div className="text-sm text-blue-800 font-semibold mb-1">
-                        🏷️ {category}
-                      </div>
-                      <ul className="space-y-2">
-                        {mems.map((memory, index) => (
-                          <li
-                            key={index}
-                            className="bg-white p-3 rounded-lg shadow border-l-4 border-blue-400"
-                          >
-                            <div className="text-gray-800">{memory.text}</div>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
         </div>
       </div>
     </div>
